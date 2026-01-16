@@ -25,8 +25,9 @@ A unified command-line interface that provides all functionality through subcomm
 - Can be used as a standalone client or embedded as a library in other applications
 - Automatically refreshes authorization token if expired during download
 - Can save downloaded zones as named by `Content-Disposition` or URL name
-- Can compare local and remote file size and modification time to skip redownloading unchanged zones
+- Can comparison local and remote file size and modification time to skip redownloading unchanged zones
 - Can download multiple zones in parallel
+- Can generate `aria2c` commands for high-performance single-file downloads
 - [Docker](#docker) image available
 
 ### Usage
@@ -94,6 +95,8 @@ Options:
      show download progress for large files (>50MB)
   -quiet
      suppress progress printing
+  -aria2
+     print aria2 download commands instead of downloading
   -redownload
      redownload zones that are newer on the remote server than local copy
   -retries uint
@@ -117,6 +120,7 @@ czds download -parallel 10 -out ./zones     # Download with 10 parallel workers
 czds download -force -zones com              # Force redownload of com zone
 czds download -exclude com,net               # Download all except com and net
 czds download -progress -zones com           # Download with progress reporting
+czds download -aria2 com                     # Generate aria2c command for com zone
 
 # Zones can also be specified as positional arguments:
 czds download com org net                    # Download com, org, and net zones

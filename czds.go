@@ -404,6 +404,14 @@ func (c *Client) AuthenticateWithContext(ctx context.Context) error {
 	return nil
 }
 
+// GetAccessToken returns the current access token.
+// The token is only available after successful authentication.
+func (c *Client) GetAccessToken() string {
+	c.authMutex.Lock()
+	defer c.authMutex.Unlock()
+	return c.auth.AccessToken
+}
+
 // getExpiration extracts the expiration time from the JWT access token.
 // It returns the expiration time as a time.Time value.
 func (ar *authResponse) getExpiration() (time.Time, error) {

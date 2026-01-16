@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -35,6 +36,7 @@ type DownloadConfig struct {
 	Zone       string   // Single zone to download (deprecated, use Zones)
 	Quiet      bool     // Suppress non-error output
 	Progress   bool     // Show progress for large file downloads
+	Aria2      bool     // Print aria2 download commands instead of downloading
 	Zones      []string // List of zones to download (from command line args)
 }
 
@@ -68,6 +70,7 @@ func downloadCmd() *Command {
 	fs.StringVar(&config.Zone, "zones", "", "comma separated list of zones to download, defaults to all")
 	fs.BoolVar(&config.Quiet, "quiet", false, "suppress progress printing")
 	fs.BoolVar(&config.Progress, "progress", false, "show download progress for large files (>50MB)")
+	fs.BoolVar(&config.Aria2, "aria2", false, "print aria2 download commands instead of downloading")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: czds download [OPTIONS] [zones...]\n\n")
@@ -156,6 +159,33 @@ func runDownload(ctx context.Context, client *czds.Client, config *DownloadConfi
 
 	if len(downloads) == 0 {
 		fmt.Println("No zones to download")
+		return nil
+	}
+
+	if config.Aria2 {
+		// Create a custom HTTP client with a timeout for redirect resolution
+		httpClient := &http.Client{
+			Timeout: 30 * time.Second,
+		}
+
+		for _, dl := range downloads {
+			finalURL := resolveDownloadURL(ctx, client, httpClient, dl, verbose)
+
+			// Extract filename from URL
+			fileName := path.Base(dl)
+
+			// Always use filepath.Base to prevent path traversal attacks
+			safeFileName := filepath.Base(fileName)
+			fullPath := filepath.Join(config.OutDir, safeFileName)
+
+			if finalURL != dl {
+				// Redirect occurred. Assume final URL is signed and does not need Auth header.
+				fmt.Printf("aria2c -x %d -s %d -o \"%s\" \"%s\"\n", config.Parallel, config.Parallel, fullPath, finalURL)
+			} else {
+				// No redirect or resolution failed. Use original URL with Auth header.
+				fmt.Printf("aria2c -x %d -s %d --header=\"Authorization: Bearer %s\" -o \"%s\" \"%s\"\n", config.Parallel, config.Parallel, client.GetAccessToken(), fullPath, dl)
+			}
+		}
 		return nil
 	}
 
@@ -497,6 +527,40 @@ func downloadTime(ctx context.Context, client *czds.Client, zi *zoneInfo, conten
 		fmt.Printf("Downloaded %s (%s) in %s\n", zi.Name, formatBytes(n), delta)
 	}
 	return nil
+}
+
+// resolveDownloadURL probes the URL to find the final destination after redirects.
+// This is used for tools like aria2 which might forward sensitive headers
+// to the redirect target (causing errors if the target is signed S3 URL).
+// It acts as the "Axel" user-agent to ensure consistent redirect behavior.
+func resolveDownloadURL(ctx context.Context, client *czds.Client, httpClient *http.Client, url string, verbose bool) string {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Error creating request for %s: %v\n", url, err)
+		}
+		return url
+	}
+
+	req.Header.Set("Authorization", "Bearer "+client.GetAccessToken())
+	req.Header.Set("Accept", "application/json")
+	// Masquerade as Axel to ensure we get the same redirect behavior as the actual tool.
+	req.Header.Set("User-Agent", "Axel")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Error resolving URL for %s: %v\n", url, err)
+		}
+		return url
+	}
+	defer resp.Body.Close()
+
+	finalURL := resp.Request.URL.String()
+	if verbose {
+		fmt.Fprintf(os.Stderr, "Resolved (%d) %s -> %s\n", resp.StatusCode, url, finalURL)
+	}
+	return finalURL
 }
 
 // shuffle randomly reorders a slice of strings using Go's built-in shuffle algorithm.
